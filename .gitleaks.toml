@@ -44,6 +44,11 @@ tags = ["secret"]
 # Global allowlist: generated files that legitimately contain high-entropy strings
 # ---------------------------------------------------------------------------
 [[allowlists]]
+description = "Docker image references (tag = commit SHA, sha256 digest) in the artifact metadata"
+regexTarget = "line"
+regexes = ['''payflex-api(?::|@sha256:)[0-9a-f]{40,64}''']
+
+[[allowlists]]
 description = "Lockfile integrity hashes and generated reports"
 paths = [
   '''(^|/)package-lock\.json$''',

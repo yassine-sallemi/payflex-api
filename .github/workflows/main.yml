@@ -63,7 +63,9 @@ jobs:
         if: always()
         with:
           name: gate-secrets-scan
-          path: reports/gate/
+          path: |
+            reports/gate/
+            reports/gitleaks-*.json
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
@@ -195,7 +197,9 @@ jobs:
         if: always()
         with:
           name: gate-build
-          path: reports/gate/
+          path: |
+            reports/gate/
+            reports/gitleaks-*.json
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
@@ -255,6 +259,7 @@ jobs:
             reports/gate/
             reports/newman.json
             reports/junit-integration.xml
+            reports/gitleaks-logs.json
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------

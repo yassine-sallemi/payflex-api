@@ -1,0 +1,30 @@
+# Observabilité du pipeline : docker compose up -d   (GITHUB_TOKEN=$(gh auth token) requis)
+services:
+  pipeline-exporter:
+    build: ./exporter
+    environment:
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-yassine-sallemi/payflex-api}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:?run with GITHUB_TOKEN=$(gh auth token)}
+      POLL_SECONDS: "60"
+    ports: ["9300:9300"]
+
+  payflex-api:
+    build: ..
+    ports: ["3000:3000"]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/payflex-pipeline.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]

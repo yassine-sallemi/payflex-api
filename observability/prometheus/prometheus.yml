@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: payflex-pipeline        # indicateurs du pipeline CI/CD (Quality Gate)
+    static_configs:
+      - targets: ['pipeline-exporter:9300']
+  - job_name: payflex-api             # métriques runtime de l'API (prom-client)
+    static_configs:
+      - targets: ['payflex-api:3000']

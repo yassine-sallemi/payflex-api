@@ -44,4 +44,4 @@ Taux de Confidentialité = `(1 − fuites / max(seuil toléré, 1)) × 100`, bor
 
 ## Observabilité (bonus)
 
-`observability/` : Prometheus + Pushgateway + Grafana. Voir `observability/README.md`.
+`observability/` : exporter du pipeline + Prometheus + Grafana. Voir `observability/README.md`.
