@@ -307,9 +307,6 @@ jobs:
     needs: [secrets-scan, unit-tests, sonarqube, build, integration-tests, performance-tests]
     if: always()
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      issues: write
     outputs:
       status: ${{ steps.gate.outputs.status }}
     steps:
@@ -334,16 +331,6 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: node scripts/quality-gate.js report
-
-      - name: Ouvrir une issue d'incident
-        if: failure() && github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh label create incident --color B60205 --description "Pipeline bloqué par le Quality Gate" 2>/dev/null || true
-          gh issue create --label incident \
-            --title "🚨 Incident pipeline #${{ github.run_number }} - déploiement bloqué (${GITHUB_SHA::7})" \
-            --body-file reports/incident-report.md
 
       - uses: actions/upload-artifact@v7
         if: always()

@@ -29,7 +29,7 @@ npm test                     # Jest + couverture
 
 Chaque étape exécute `scripts/quality-gate.js <étape>` qui classe chaque indicateur :
 
-| Indicateur | Non-critique (alerte, le pipeline continue) | Critique (Fail Fast, pas de déploiement) |
+| Indicateur | Non-critique (alerte, le pipeline continue) | Critique |
 |---|---|---|
 | Couverture | 70 % ≤ couverture < 80 % | < 70 % |
 | Tests UT / IT | – | au moins un test en échec |
