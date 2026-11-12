@@ -33,6 +33,14 @@ describe('card utilities', () => {
     expect(card.brand('6011111111111117')).toBe('UNKNOWN');
   });
 
+  test('fingerprints are deterministic, distinct and never contain the PAN', () => {
+    const fp = card.fingerprint(VISA_TEST);
+    expect(fp).toMatch(/^[0-9a-f]{64}$/);
+    expect(card.fingerprint(VISA_TEST)).toBe(fp);
+    expect(card.fingerprint(MC_TEST)).not.toBe(fp);
+    expect(fp).not.toContain(VISA_TEST);
+  });
+
   test('masks all but the last 4 digits', () => {
     expect(card.mask(VISA_TEST)).toBe('**** **** **** 1111');
   });

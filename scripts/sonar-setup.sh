@@ -17,6 +17,11 @@ curl -sf -u "$DEFAULT_CREDS" -X POST "$S/api/users/change_password" \
 A="admin:$PASS"
 
 curl -sf -u "$A" -X POST "$S/api/qualitygates/create" -d "name=PayFlex" >/dev/null || true
+# SonarQube seeds new gates with the "Sonar way" conditions: remove them so the
+# gate holds exactly the critical thresholds of quality-gate.config.json.
+for id in $(curl -sf -u "$A" "$S/api/qualitygates/show?name=PayFlex" | grep -oE '"id":"[^"]+"' | cut -d'"' -f4); do
+  curl -sf -u "$A" -X POST "$S/api/qualitygates/delete_condition" -d "id=$id" >/dev/null || true
+done
 cond() { curl -sf -u "$A" -X POST "$S/api/qualitygates/create_condition" \
   -d "gateName=PayFlex&metric=$1&op=$2&error=$3" >/dev/null; }
 cond line_coverage LT 70                         # line coverage < 70 %   -> critical

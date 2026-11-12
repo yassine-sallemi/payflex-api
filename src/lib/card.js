@@ -2,8 +2,6 @@
 
 const crypto = require('node:crypto');
 
-// OWASP recommendation for PBKDF2-HMAC-SHA512.
-const FINGERPRINT_ITERATIONS = 210_000;
 const FINGERPRINT_PEPPER = process.env.CARD_PEPPER || 'payflex-dev-pepper';
 
 /** Luhn checksum for a string of digits. */
@@ -39,9 +37,14 @@ function mask(digits) {
   return `**** **** **** ${digits.slice(-4)}`;
 }
 
-/** Irreversible card fingerprint, used to detect the same card across top-ups. */
+/**
+ * Irreversible card fingerprint, used to detect the same card across top-ups.
+ * Keyed hash (HMAC-SHA256 + secret pepper): irreversible without the key and
+ * computed in microseconds. A slow KDF (PBKDF2) is meant for passwords, not for
+ * a hot request path: it blocked the event loop (p95 > 500 ms, pipeline #8).
+ */
 function fingerprint(digits) {
-  return crypto.pbkdf2Sync(digits, FINGERPRINT_PEPPER, FINGERPRINT_ITERATIONS, 32, 'sha512').toString('hex');
+  return crypto.createHmac('sha256', FINGERPRINT_PEPPER).update(digits).digest('hex');
 }
 
 module.exports = { luhnValid, normalize, brand, mask, fingerprint };
