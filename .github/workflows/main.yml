@@ -324,7 +324,9 @@ jobs:
       - name: Rassembler les évaluations
         run: |
           mkdir -p reports/gate
-          find collected -path '*/gate/*.json' -exec cp {} reports/gate/ \; || true
+          # upload-artifact retire le préfixe commun des chemins : on identifie les
+          # évaluations par leur contenu plutôt que par leur emplacement
+          grep -rlZ --include='*.json' '"findings"' collected | xargs -0 -r cp -t reports/gate/
           ls reports/gate
 
       - name: Classification des erreurs & décision
