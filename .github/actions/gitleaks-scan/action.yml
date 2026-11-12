@@ -1,0 +1,39 @@
+name: Gitleaks scan
+description: Installe Gitleaks (version épinglée) et scanne un répertoire ou une plage de commits. Le rapport JSON est toujours produit (exit-code 0) ; c'est le Quality Gate qui décide.
+inputs:
+  scope:
+    description: Nom du périmètre (source, history, artifact, logs) -> reports/gitleaks-<scope>.json
+    required: true
+  mode:
+    description: "dir ou git"
+    default: dir
+  target:
+    description: Répertoire à scanner
+    default: .
+  log-opts:
+    description: Options git log (mode git uniquement), ex. "abc123..def456"
+    default: ""
+  version:
+    default: 8.30.1
+runs:
+  using: composite
+  steps:
+    - name: Install gitleaks ${{ inputs.version }}
+      shell: bash
+      run: |
+        if ! command -v gitleaks >/dev/null; then
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${{ inputs.version }}/gitleaks_${{ inputs.version }}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+        fi
+        gitleaks version
+    - name: Scan (${{ inputs.scope }})
+      shell: bash
+      run: |
+        mkdir -p reports
+        args=(--config .gitleaks.toml --redact --no-banner --exit-code 0 -f json -r "reports/gitleaks-${{ inputs.scope }}.json")
+        if [ "${{ inputs.mode }}" = "git" ]; then
+          gitleaks git . "${args[@]}" ${{ inputs.log-opts && format('--log-opts="{0}"', inputs.log-opts) || '' }}
+        else
+          gitleaks dir "${{ inputs.target }}" "${args[@]}"
+        fi
+        echo "Fuites détectées (${{ inputs.scope }}) : $(node -e 'console.log(require(process.argv[1]).length)' "$PWD/reports/gitleaks-${{ inputs.scope }}.json")"

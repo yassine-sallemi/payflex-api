@@ -1,0 +1,11 @@
+{
+  "coverage": { "warningBelow": 80, "criticalBelow": 70 },
+  "performance": {
+    "p95WarningMs": 200,
+    "p95CriticalMs": 500,
+    "errorRateWarning": 0.01,
+    "errorRateCritical": 0.02
+  },
+  "confidentiality": { "maxToleratedLeaks": 0, "requiredRate": 100 },
+  "sonar": { "codeSmellsWarningAbove": 0 }
+}

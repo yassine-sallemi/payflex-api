@@ -1,0 +1,388 @@
+name: PayFlex CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+  SONAR_IMAGE: sonarqube:26.11.0.134175-community
+  SONAR_SCANNER_IMAGE: sonarsource/sonar-scanner-cli@sha256:6e6eca4d552695a98fb7dab84f0c1bd0885ebbfe272654d1552e24bd7f452d51
+  K6_IMAGE: grafana/k6:2.3.0
+  IMAGE: payflex-api:${{ github.sha }}
+
+# Chaque étape dépend de la précédente (needs) : la première étape en échec
+# CRITIQUE arrête le pipeline (Fail Fast), les suivantes sont "skipped".
+jobs:
+  # ---------------------------------------------------------------------------
+  secrets-scan:
+    name: 1. Confidentialité - code source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Plage de commits à analyser
+        id: range
+        run: |
+          before="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "opts=${{ github.event.pull_request.base.sha }}..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$before" 2>/dev/null; then
+            echo "opts=${before}..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "opts=-1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gitleaks - code source & fichiers de configuration
+        uses: ./.github/actions/gitleaks-scan
+        with:
+          scope: source
+
+      - name: Gitleaks - commits poussés
+        uses: ./.github/actions/gitleaks-scan
+        with:
+          scope: history
+          mode: git
+          log-opts: ${{ steps.range.outputs.opts }}
+
+      - name: Quality Gate - Taux de Confidentialité
+        run: node scripts/quality-gate.js confidentiality source history
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-secrets-scan
+          path: reports/gate/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: 2. Tests unitaires & couverture
+    needs: secrets-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      - name: Jest (UT + couverture)
+        # Le verdict est rendu par le Quality Gate, pas par le code retour de Jest.
+        run: npx jest --coverage --json --outputFile=reports/jest-results.json || true
+
+      - name: Quality Gate - tests & couverture
+        run: node scripts/quality-gate.js unit
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: |
+            reports/coverage/
+            reports/junit-unit.xml
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-unit-tests
+          path: reports/gate/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  sonarqube:
+    name: 3. Analyse statique SonarQube
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage
+          path: reports
+
+      - name: Démarrer SonarQube CE (éphémère)
+        run: docker run -d --name sonarqube -p 9000:9000 "$SONAR_IMAGE"
+
+      - name: Configurer SonarQube (token + Quality Gate PayFlex)
+        run: |
+          pass="Ci$(openssl rand -hex 12)!Aa"
+          echo "::add-mask::$pass"
+          echo "SONAR_ADMIN_PASSWORD=$pass" >> "$GITHUB_ENV"
+          token=$(SONAR_ADMIN_PASSWORD="$pass" bash scripts/sonar-setup.sh)
+          echo "::add-mask::$token"
+          echo "SONAR_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Analyse (sonar-scanner)
+        run: |
+          # chemins lcov absolus du job précédent -> relatifs au projet
+          sed -i "s#^SF:.*/src/#SF:src/#" reports/coverage/lcov.info
+          docker run --rm --network host -v "$PWD:/usr/src" \
+            -e SONAR_HOST_URL=http://localhost:9000 -e SONAR_TOKEN \
+            "$SONAR_SCANNER_IMAGE" -Dsonar.projectVersion=${{ github.sha }}
+
+      - name: Récupérer le résultat SonarQube
+        run: bash scripts/sonar-report.sh
+
+      - name: Quality Gate - bugs, code smells, Quality Gate SonarQube
+        run: node scripts/quality-gate.js sonar
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-sonarqube
+          path: |
+            reports/gate/
+            reports/sonar.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  build:
+    name: 4. Build & scan de l'artefact
+    needs: sonarqube
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build de l'image Docker
+        run: |
+          docker build --label org.opencontainers.image.revision=${{ github.sha }} -t "$IMAGE" .
+          docker save "$IMAGE" | gzip > payflex-image.tar.gz
+
+      - name: Extraire le contenu de l'artefact
+        run: |
+          mkdir -p artifact-fs
+          cid=$(docker create "$IMAGE")
+          docker export "$cid" | tar -x -C artifact-fs app
+          docker rm "$cid"
+          # la configuration de l'image (ENV, labels, historique) fait aussi partie de l'artefact
+          docker image inspect "$IMAGE" > artifact-fs/image-config.json
+          docker history --no-trunc "$IMAGE" > artifact-fs/image-history.txt
+
+      - name: Gitleaks - artefact de build
+        uses: ./.github/actions/gitleaks-scan
+        with:
+          scope: artifact
+          target: artifact-fs
+
+      - name: Quality Gate - confidentialité de l'artefact
+        run: node scripts/quality-gate.js confidentiality artifact
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image
+          path: payflex-image.tar.gz
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-build
+          path: reports/gate/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  integration-tests:
+    name: 5. Tests d'intégration (Docker + Newman)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: image
+
+      - name: Démarrer l'API dans un conteneur éphémère
+        run: |
+          gunzip -c payflex-image.tar.gz | docker load
+          docker run -d --name payflex -p 3000:3000 -e APP_VERSION=${{ github.sha }} "$IMAGE"
+          for i in $(seq 1 30); do curl -sf localhost:3000/health && exit 0; sleep 1; done
+          docker logs payflex; exit 1
+
+      - name: Scénario API (Newman)
+        run: |
+          npx --yes newman@6 run tests/postman/payflex.postman_collection.json \
+            --env-var baseUrl=http://localhost:3000 \
+            -r cli,json,junit \
+            --reporter-json-export reports/newman.json \
+            --reporter-junit-export reports/junit-integration.xml || true
+
+      - name: Collecter les logs du conteneur
+        if: always()
+        run: |
+          mkdir -p reports/logs
+          docker logs payflex > reports/logs/payflex.log 2>&1 || true
+          docker rm -f payflex || true
+
+      - name: Gitleaks - logs d'exécution
+        uses: ./.github/actions/gitleaks-scan
+        with:
+          scope: logs
+          target: reports/logs
+
+      - name: Quality Gate - contrat API & confidentialité des logs
+        run: |
+          rc=0
+          node scripts/quality-gate.js integration || rc=1
+          node scripts/quality-gate.js confidentiality logs || rc=1
+          exit $rc
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-integration-tests
+          path: |
+            reports/gate/
+            reports/newman.json
+            reports/junit-integration.xml
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  performance-tests:
+    name: 6. Tests de performance (k6)
+    needs: integration-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: image
+
+      - name: Démarrer l'API
+        run: |
+          gunzip -c payflex-image.tar.gz | docker load
+          docker run -d --name payflex -p 3000:3000 "$IMAGE"
+          for i in $(seq 1 30); do curl -sf localhost:3000/health && exit 0; sleep 1; done
+          exit 1
+
+      - name: Tir de charge k6
+        run: |
+          mkdir -p reports
+          docker run --rm --network host -u "$(id -u):$(id -g)" -v "$PWD:/w" -w /w \
+            -e BASE_URL=http://localhost:3000 "$K6_IMAGE" run tests/perf/load.js || echo "k6 exit code: $?"
+
+      - name: Quality Gate - latence p95 & taux d'erreur
+        run: node scripts/quality-gate.js perf
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-performance-tests
+          path: |
+            reports/gate/
+            reports/k6-summary.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  quality-report:
+    name: 7. Rapport Quality Gate
+    needs: [secrets-scan, unit-tests, sonarqube, build, integration-tests, performance-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      status: ${{ steps.gate.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gate-*
+          path: collected
+      - name: Rassembler les évaluations
+        run: |
+          mkdir -p reports/gate
+          find collected -path '*/gate/*.json' -exec cp {} reports/gate/ \; || true
+          ls reports/gate
+
+      - name: Classification des erreurs & décision
+        id: gate
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node scripts/quality-gate.js report
+
+      - name: Ouvrir une issue d'incident
+        if: failure() && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create incident --color B60205 --description "Pipeline bloqué par le Quality Gate" 2>/dev/null || true
+          gh issue create --label incident \
+            --title "🚨 Incident pipeline #${{ github.run_number }} - déploiement bloqué (${GITHUB_SHA::7})" \
+            --body-file reports/incident-report.md
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-gate-report
+          path: |
+            reports/gate-report.json
+            reports/gate-report.md
+            reports/incident-report.md
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: 8. Déploiement (Docker Hub)
+    needs: quality-report
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://hub.docker.com/r/${{ vars.DOCKERHUB_USERNAME }}/payflex-api
+    steps:
+      - name: Vérifier les identifiants du registre
+        env:
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "${{ vars.DOCKERHUB_USERNAME }}" ]; then
+            echo "::error::DOCKERHUB_TOKEN / DOCKERHUB_USERNAME non configurés"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: image
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publier l'image validée
+        run: |
+          gunzip -c payflex-image.tar.gz | docker load
+          repo="${{ vars.DOCKERHUB_USERNAME }}/payflex-api"
+          for tag in "${GITHUB_SHA::7}" latest; do
+            docker tag "$IMAGE" "$repo:$tag"
+            docker push "$repo:$tag"
+          done
+          {
+            echo "### 🚀 Déploiement effectué"
+            echo "Image publiée : \`$repo:${GITHUB_SHA::7}\` (et \`latest\`)"
+            echo "Statut Quality Gate : **${{ needs.quality-report.outputs.status }}**"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,164 @@
+{
+  "info": {
+    "name": "PayFlex API - Integration",
+    "description": "Scénario d'intégration : contrat de l'API et flux de données (comptes -> virement -> paiement carte -> historique).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health check",
+      "request": { "method": "GET", "url": "{{baseUrl}}/health" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 200', () => pm.response.to.have.status(200));",
+        "pm.test('service is UP', () => pm.expect(pm.response.json().status).to.eql('UP'));",
+        "pm.test('responds under 200ms', () => pm.expect(pm.response.responseTime).to.be.below(200));"
+      ] } }]
+    },
+    {
+      "name": "Open account Alice",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/accounts",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"owner\": \"Alice\", \"currency\": \"EUR\", \"initialBalance\": 1000 }" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 201', () => pm.response.to.have.status(201));",
+        "const body = pm.response.json();",
+        "pm.test('contract: id, owner, currency, balance', () => {",
+        "  pm.expect(body).to.have.all.keys('id', 'owner', 'currency', 'balance', 'createdAt');",
+        "  pm.expect(body.balance).to.eql(1000);",
+        "});",
+        "pm.collectionVariables.set('aliceId', body.id);"
+      ] } }]
+    },
+    {
+      "name": "Open account Bob",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/accounts",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"owner\": \"Bob\", \"currency\": \"EUR\" }" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 201', () => pm.response.to.have.status(201));",
+        "pm.test('starts at 0', () => pm.expect(pm.response.json().balance).to.eql(0));",
+        "pm.collectionVariables.set('bobId', pm.response.json().id);"
+      ] } }]
+    },
+    {
+      "name": "Reject invalid account",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/accounts",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"owner\": \"Z\", \"currency\": \"JPY\" }" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 400', () => pm.response.to.have.status(400));",
+        "pm.test('error code', () => pm.expect(pm.response.json().error).to.eql('INVALID_OWNER'));"
+      ] } }]
+    },
+    {
+      "name": "Transfer Alice -> Bob",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/transfers",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"from\": \"{{aliceId}}\", \"to\": \"{{bobId}}\", \"amount\": 250.75 }" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 201', () => pm.response.to.have.status(201));",
+        "const tx = pm.response.json();",
+        "pm.test('transaction contract', () => {",
+        "  pm.expect(tx.type).to.eql('TRANSFER');",
+        "  pm.expect(tx.amount).to.eql(250.75);",
+        "  pm.expect(tx.currency).to.eql('EUR');",
+        "});"
+      ] } }]
+    },
+    {
+      "name": "Balances after transfer",
+      "request": { "method": "GET", "url": "{{baseUrl}}/accounts/{{aliceId}}" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('Alice debited', () => pm.expect(pm.response.json().balance).to.eql(749.25));"
+      ] } }]
+    },
+    {
+      "name": "Reject overdraft",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/transfers",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"from\": \"{{bobId}}\", \"to\": \"{{aliceId}}\", \"amount\": 9999 }" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 422', () => pm.response.to.have.status(422));",
+        "pm.test('INSUFFICIENT_FUNDS', () => pm.expect(pm.response.json().error).to.eql('INSUFFICIENT_FUNDS'));"
+      ] } }]
+    },
+    {
+      "name": "Card top-up (masked PAN)",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/payments/card",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"accountId\": \"{{bobId}}\", \"amount\": 100, \"cardNumber\": \"4111 1111 1111 1111\" }" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 201', () => pm.response.to.have.status(201));",
+        "pm.test('fee applied', () => pm.expect(pm.response.json().credited).to.eql(98.5));",
+        "pm.test('PAN is masked (confidentiality)', () => {",
+        "  pm.expect(pm.response.text()).to.not.include('4111111111111111');",
+        "  pm.expect(pm.response.json().card.masked).to.eql('**** **** **** 1111');",
+        "});"
+      ] } }]
+    },
+    {
+      "name": "Reject invalid card",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/payments/card",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"accountId\": \"{{bobId}}\", \"amount\": 10, \"cardNumber\": \"1234 5678\" }" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 400', () => pm.response.to.have.status(400));",
+        "pm.test('INVALID_CARD', () => pm.expect(pm.response.json().error).to.eql('INVALID_CARD'));"
+      ] } }]
+    },
+    {
+      "name": "Bob transaction history",
+      "request": { "method": "GET", "url": "{{baseUrl}}/accounts/{{bobId}}/transactions" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 200', () => pm.response.to.have.status(200));",
+        "pm.test('2 transactions (transfer + card)', () => pm.expect(pm.response.json()).to.have.lengthOf(2));",
+        "pm.test('Bob balance consistent', () => {",
+        "  pm.sendRequest(pm.variables.get('baseUrl') + '/accounts/' + pm.variables.get('bobId'), (err, res) => {",
+        "    pm.expect(err).to.be.null;",
+        "    pm.expect(res.json().balance).to.eql(349.25);",
+        "  });",
+        "});"
+      ] } }]
+    },
+    {
+      "name": "Unknown account returns 404",
+      "request": { "method": "GET", "url": "{{baseUrl}}/accounts/does-not-exist" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('status 404', () => pm.response.to.have.status(404));"
+      ] } }]
+    },
+    {
+      "name": "Metrics endpoint",
+      "request": { "method": "GET", "url": "{{baseUrl}}/metrics" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('Prometheus format', () => pm.expect(pm.response.text()).to.include('payflex_payments_total'));"
+      ] } }]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "aliceId", "value": "" },
+    { "key": "bobId", "value": "" }
+  ]
+}
