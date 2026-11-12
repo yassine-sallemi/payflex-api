@@ -1,5 +1,11 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
+// OWASP recommendation for PBKDF2-HMAC-SHA512.
+const FINGERPRINT_ITERATIONS = 210_000;
+const FINGERPRINT_PEPPER = process.env.CARD_PEPPER || 'payflex-dev-pepper';
+
 /** Luhn checksum for a string of digits. */
 function luhnValid(digits) {
   if (!/^\d{12,19}$/.test(digits)) return false;
@@ -33,4 +39,9 @@ function mask(digits) {
   return `**** **** **** ${digits.slice(-4)}`;
 }
 
-module.exports = { luhnValid, normalize, brand, mask };
+/** Irreversible card fingerprint, used to detect the same card across top-ups. */
+function fingerprint(digits) {
+  return crypto.pbkdf2Sync(digits, FINGERPRINT_PEPPER, FINGERPRINT_ITERATIONS, 32, 'sha512').toString('hex');
+}
+
+module.exports = { luhnValid, normalize, brand, mask, fingerprint };

@@ -86,7 +86,7 @@ function createPaymentService(store) {
         fee: fromCents(fee),
         credited: fromCents(credited),
         currency: account.currency,
-        card: { brand: card.brand(digits), masked: card.mask(digits) },
+        card: { brand: card.brand(digits), masked: card.mask(digits), fingerprint: card.fingerprint(digits).slice(0, 16) },
       });
     },
 
