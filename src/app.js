@@ -4,12 +4,14 @@ const express = require('express');
 const { createStore } = require('./store');
 const { createPaymentService, PaymentError } = require('./services/payments');
 const { createMetrics } = require('./metrics');
+const { createStatementService } = require('./services/statements');
 const log = require('./lib/logger');
 
 function createApp({ store = createStore() } = {}) {
   const app = express();
   const payments = createPaymentService(store);
   const metrics = createMetrics();
+  const statements = createStatementService(store);
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '10kb' }));
@@ -43,6 +45,20 @@ function createApp({ store = createStore() } = {}) {
   app.get('/accounts/:id/transactions', (req, res) => {
     if (!store.getAccount(req.params.id)) throw new PaymentError(404, 'ACCOUNT_NOT_FOUND', 'account not found');
     res.json(store.listTransactions(req.params.id));
+  });
+
+  app.get('/accounts/:id/statement', (req, res) => {
+    const statement = statements.build(req.params.id, req.query);
+    if (req.query.format === 'csv') {
+      res.type('text/csv').attachment(`statement-${req.params.id}.csv`);
+      return res.send(statements.toCsv(statement));
+    }
+    return res.json(statement);
+  });
+
+  app.get('/accounts/:id/statement/monthly', (req, res) => {
+    const statement = statements.build(req.params.id, req.query);
+    res.json({ accountId: statement.accountId, currency: statement.currency, months: statements.monthly(statement) });
   });
 
   app.post('/transfers', (req, res) => {
