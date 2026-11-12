@@ -4,7 +4,7 @@ set -euo pipefail
 S="${SONAR_URL:-http://localhost:9000}"
 A="admin:${SONAR_ADMIN_PASSWORD:?missing}"
 KEY="${SONAR_PROJECT_KEY:-payflex-api}"
-METRICS="coverage,bugs,code_smells,sqale_index,reliability_issues,software_quality_blocker_issues,software_quality_security_issues,software_quality_reliability_rating,ncloc,duplicated_lines_density"
+METRICS="coverage,line_coverage,bugs,code_smells,sqale_index,reliability_issues,software_quality_blocker_issues,software_quality_security_issues,software_quality_reliability_rating,ncloc,duplicated_lines_density"
 
 # wait for the background Compute Engine task to finish
 for _ in $(seq 1 60); do

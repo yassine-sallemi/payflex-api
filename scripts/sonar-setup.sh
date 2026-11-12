@@ -19,7 +19,7 @@ A="admin:$PASS"
 curl -sf -u "$A" -X POST "$S/api/qualitygates/create" -d "name=PayFlex" >/dev/null || true
 cond() { curl -sf -u "$A" -X POST "$S/api/qualitygates/create_condition" \
   -d "gateName=PayFlex&metric=$1&op=$2&error=$3" >/dev/null; }
-cond coverage LT 70                              # coverage < 70 %        -> critical
+cond line_coverage LT 70                         # line coverage < 70 %   -> critical
 cond software_quality_blocker_issues GT 0        # any blocker issue      -> critical
 cond software_quality_reliability_rating GT 3    # high/blocker bug (D/E) -> critical
 cond software_quality_security_rating GT 3       # high/blocker vuln      -> critical
