@@ -10,7 +10,7 @@
   "version": 1,
   "refresh": "30s",
   "time": {
-    "from": "now-6h",
+    "from": "now-15m",
     "to": "now"
   },
   "panels": [
@@ -149,7 +149,7 @@
               }
             ]
           },
-          "decimals": 1,
+          "decimals": 0,
           "mappings": [],
           "color": {
             "mode": "thresholds"
@@ -461,7 +461,7 @@
               }
             ]
           },
-          "decimals": 1,
+          "decimals": 0,
           "mappings": [],
           "color": {
             "mode": "thresholds"
