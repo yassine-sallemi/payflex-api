@@ -1,7 +1,6 @@
 'use strict';
 
 const card = require('../lib/card');
-const fraud = require('./fraud');
 
 const SUPPORTED_CURRENCIES = ['EUR', 'USD', 'TND'];
 const MAX_TRANSFER = 10_000;
@@ -64,7 +63,6 @@ function createPaymentService(store) {
       }
       const cents = toCents(amount);
       if (source.balance < cents) throw new PaymentError(422, 'INSUFFICIENT_FUNDS', 'insufficient funds');
-      fraud.scoreTransfer({ amount });
 
       source.balance -= cents;
       target.balance += cents;
